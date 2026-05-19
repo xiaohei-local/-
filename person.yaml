@@ -1,0 +1,37 @@
+
+path: coco # dataset root dir
+train: train/images # train images (relative to 'path') 118287 images
+val: val/images # val images (relative to 'path') 5000 images
+test: test/images # 20288 of 40670 images, submit to https://competitions.codalab.org/competitions/20794
+
+# Classes
+names:
+  0: normal
+  1: fall down
+  2: car
+  3: motorcycle
+  4: airplane
+  5: bus
+  6: train
+  7: truck
+
+
+# Download script/URL (optional)
+download: |
+  from pathlib import Path
+
+  from ultralytics.utils.downloads import download
+
+  # Download labels
+  segments = True  # segment or box labels
+  dir = Path(yaml["path"])  # dataset root dir
+  url = "https://github.com/ultralytics/assets/releases/download/v0.0.0/"
+  urls = [url + ("coco2017labels-segments.zip" if segments else "coco2017labels.zip")]  # labels
+  download(urls, dir=dir.parent)
+  # Download data
+  urls = [
+      "http://images.cocodataset.org/zips/train2017.zip",  # 19G, 118k images
+      "http://images.cocodataset.org/zips/val2017.zip",  # 1G, 5k images
+      "http://images.cocodataset.org/zips/test2017.zip",  # 7G, 41k images (optional)
+  ]
+  download(urls, dir=dir / "images", threads=3)
