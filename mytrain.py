@@ -9,11 +9,6 @@ if __name__ == "__main__":
         batch=-1,
         cache="ram",
         workers=8,
-
         save=True,
-
-
-
-        patience = 20,
-
+        patience=20,
     )
