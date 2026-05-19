@@ -1,39 +1,56 @@
 """
 自动扶梯行人安全检测系统 — PyQt5 可视化界面 (Dark Dashboard)
-功能: 多路视频网格监控 + ROI区域检测 + 声音报警 + 干预按钮
+功能: 多路视频网格监控 + ROI区域检测 + 声音报警 + 干预按钮.
 """
-import sys
+
 import os
+import sys
+import threading
+import time
+from collections import defaultdict, deque
+from datetime import datetime
+
 import cv2
 import numpy as np
 import torch
-import time
-import threading
-from collections import deque, defaultdict
-from datetime import datetime
-
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QDialog, QLabel, QPushButton, QLineEdit,
-    QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QSlider, QComboBox, QFileDialog,
-    QMessageBox, QWidget, QListWidget, QStatusBar, QAction,
-    QAbstractItemView, QSplitter, QScrollArea
-)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, QRect
-from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen
-
-from ultralytics import YOLO
 from PIL import Image, ImageDraw, ImageFont
-
-from database import init_db, verify_login, register_user, log_alert
-from action_recognition import (
-    ActionRecognizer, ACTION_CN, DANGER_ACTIONS, CAUTION_ACTIONS
+from PyQt5.QtCore import QRect, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QSplitter,
+    QStatusBar,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
+
+from action_recognition import ACTION_CN, CAUTION_ACTIONS, DANGER_ACTIONS, ActionRecognizer
+from database import init_db, log_alert, register_user, verify_login
+from ultralytics import YOLO
 
 
 def play_alarm_sound(stop_event):
     try:
         import winsound
+
         for _ in range(6):
             if stop_event.is_set():
                 return
@@ -46,15 +63,26 @@ def play_alarm_sound(stop_event):
 
 
 SKELETON = [
-    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
-    (5, 11), (6, 12), (11, 12),
-    (11, 13), (13, 15), (12, 14), (14, 16),
-    (0, 1), (0, 2), (1, 3), (2, 4)
+    (5, 6),
+    (5, 7),
+    (7, 9),
+    (6, 8),
+    (8, 10),
+    (5, 11),
+    (6, 12),
+    (11, 12),
+    (11, 13),
+    (13, 15),
+    (12, 14),
+    (14, 16),
+    (0, 1),
+    (0, 2),
+    (1, 3),
+    (2, 4),
 ]
 
 FONT_PATH = None
-for c in ['simhei.ttf', 'C:/Windows/Fonts/simhei.ttf',
-          'C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/simsun.ttc']:
+for c in ["simhei.ttf", "C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simsun.ttc"]:
     if os.path.exists(c):
         FONT_PATH = c
         break
@@ -87,8 +115,7 @@ def draw_roi(img, roi):
     if roi is not None:
         rx1, ry1, rx2, ry2 = roi
         cv2.rectangle(img, (rx1, ry1), (rx2, ry2), (255, 200, 0), 2)
-        cv2.putText(img, 'ROI', (rx1, ry1 - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 0), 1)
+        cv2.putText(img, "ROI", (rx1, ry1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 0), 1)
     return img
 
 
@@ -255,11 +282,14 @@ class LoginWindow(QDialog):
         self._init_ui()
 
     def _style(self):
-        return DARK_QSS + """
+        return (
+            DARK_QSS
+            + """
         QDialog { background: #1a1a2e; }
         QLabel#title { font-size: 22px; font-weight: bold; color: #e0e0e0; }
         QLabel#subtitle { font-size: 12px; color: #8b8ba0; }
         """
+        )
 
     def _init_ui(self):
         layout = QVBoxLayout()
@@ -293,7 +323,8 @@ class LoginWindow(QDialog):
         self.login_btn.setStyleSheet(
             "QPushButton { background: #4f46e5; color: white; border: none; "
             "padding: 12px; border-radius: 8px; font-size: 15px; font-weight: bold; }"
-            "QPushButton:hover { background: #4338ca; }")
+            "QPushButton:hover { background: #4338ca; }"
+        )
         self.login_btn.clicked.connect(self._login)
         btn_layout.addWidget(self.login_btn)
 
@@ -301,7 +332,8 @@ class LoginWindow(QDialog):
         self.register_btn.setStyleSheet(
             "QPushButton { background: #10b981; color: white; border: none; "
             "padding: 12px; border-radius: 8px; font-size: 15px; font-weight: bold; }"
-            "QPushButton:hover { background: #059669; }")
+            "QPushButton:hover { background: #059669; }"
+        )
         self.register_btn.clicked.connect(self._register)
         btn_layout.addWidget(self.register_btn)
         layout.addLayout(btn_layout)
@@ -318,7 +350,7 @@ class LoginWindow(QDialog):
         if not username or not password:
             self.msg_label.setText("请输入用户名和密码")
             return
-        ok, role = verify_login(username, password)
+        ok, _role = verify_login(username, password)
         if ok:
             self.accept()
         else:
@@ -360,7 +392,8 @@ class VideoLabel(QLabel):
         self.setMinimumSize(280, 180)
         self.setStyleSheet(
             "QLabel { background: #0a0a14; color: #6b6b80; "
-            "border: 2px solid #252540; border-radius: 6px; font-size: 14px; }")
+            "border: 2px solid #252540; border-radius: 6px; font-size: 14px; }"
+        )
 
     def set_roi_mode(self, enabled):
         self.roi_mode = enabled
@@ -447,7 +480,7 @@ class MainWindow(QMainWindow):
         self.skeleton_conf = 0.3
         self.frame_skip = 1
         self.alert_cooldown = 3
-        self.escalator_direction = 'up'
+        self.escalator_direction = "up"
         self.seq_length = 16
 
         self._alert_cooldown_times = {}
@@ -459,7 +492,7 @@ class MainWindow(QMainWindow):
         self.emergency_stop_active = False
 
         self.left_panel_visible = True
-        self.layout_mode = 'auto'
+        self.layout_mode = "auto"
         self.active_video_idx = 0
 
         self._init_ui()
@@ -493,7 +526,7 @@ class MainWindow(QMainWindow):
         self.video_grid.setSpacing(3)
         self.video_grid.setContentsMargins(3, 3, 3, 3)
         self.video_grid_widget.setLayout(self.video_grid)
-        self._setup_video_grid(1, 'auto')
+        self._setup_video_grid(1, "auto")
         self.content_splitter.addWidget(self.video_grid_widget)
 
         self.right_panel_scroll = self._create_right_panel()
@@ -517,11 +550,10 @@ class MainWindow(QMainWindow):
         main_vbox.addWidget(self.main_splitter)
 
     def _create_header(self):
-        """Top toolbar bar"""
+        """Top toolbar bar."""
         header = QWidget()
         header.setFixedHeight(44)
-        header.setStyleSheet(
-            "QWidget { background: #1a1a2e; border-bottom: 1px solid #2a2a4a; }")
+        header.setStyleSheet("QWidget { background: #1a1a2e; border-bottom: 1px solid #2a2a4a; }")
 
         h = QHBoxLayout(header)
         h.setContentsMargins(14, 6, 14, 6)
@@ -535,14 +567,14 @@ class MainWindow(QMainWindow):
         self.btn_toggle_left.setStyleSheet(
             "QPushButton { background: #252540; color: #8b8ba0; border: 1px solid #333350; "
             "border-radius: 5px; font-size: 12px; }"
-            "QPushButton:hover { background: #333358; color: #fff; border-color: #4f46e5; }")
+            "QPushButton:hover { background: #333358; color: #fff; border-color: #4f46e5; }"
+        )
         h.addWidget(self.btn_toggle_left)
 
         h.addSpacing(8)
 
         title = QLabel("自动扶梯安全检测系统")
-        title.setStyleSheet(
-            "font-size: 15px; font-weight: bold; color: #e0e0e0; border: none; padding-right: 20px;")
+        title.setStyleSheet("font-size: 15px; font-weight: bold; color: #e0e0e0; border: none; padding-right: 20px;")
         h.addWidget(title)
 
         h.addSpacing(12)
@@ -552,7 +584,8 @@ class MainWindow(QMainWindow):
             "padding: 4px 14px; border-radius: 5px; font-size: 12px; }"
             "QPushButton:hover { background: #333358; border-color: #4f46e5; color: #fff; }"
             "QPushButton:checked { background: #4f46e5; border-color: #4f46e5; color: #fff; }"
-            "QPushButton:disabled { background: #1a1a2e; color: #505060; border-color: #2a2a38; }")
+            "QPushButton:disabled { background: #1a1a2e; color: #505060; border-color: #2a2a38; }"
+        )
 
         self.btn_add_video = QPushButton("+ 添加视频")
         self.btn_add_video.setStyleSheet(btn_css)
@@ -599,7 +632,7 @@ class MainWindow(QMainWindow):
         return header
 
     def _create_left_panel(self):
-        """Left thumbnail panel with video list and layout controls"""
+        """Left thumbnail panel with video list and layout controls."""
         panel = QWidget()
         panel.setObjectName("leftPanel")
         panel.setMinimumWidth(160)
@@ -634,10 +667,11 @@ class MainWindow(QMainWindow):
             "QPushButton { background: #252540; color: #a0a0b0; border: 1px solid #333350; "
             "border-radius: 4px; font-size: 11px; padding: 4px 0px; }"
             "QPushButton:hover { background: #333358; color: #fff; }"
-            "QPushButton:checked { background: #4f46e5; border-color: #4f46e5; color: #fff; }")
+            "QPushButton:checked { background: #4f46e5; border-color: #4f46e5; color: #fff; }"
+        )
 
         self.layout_btns = {}
-        for mode_id, mode_text in [('1x1', '1×1'), ('2x2', '2×2'), ('1+2', '1+2')]:
+        for mode_id, mode_text in [("1x1", "1×1"), ("2x2", "2×2"), ("1+2", "1+2")]:
             btn = QPushButton(mode_text)
             btn.setCheckable(True)
             btn.setFixedHeight(28)
@@ -646,14 +680,14 @@ class MainWindow(QMainWindow):
             self.layout_btns[mode_id] = btn
             mode_layout.addWidget(btn)
         # default to 2x2
-        self.layout_btns['2x2'].setChecked(True)
-        self.layout_mode = '2x2'
+        self.layout_btns["2x2"].setChecked(True)
+        self.layout_mode = "2x2"
         layout.addLayout(mode_layout)
 
         return panel
 
     def _create_right_panel(self):
-        """Right control panel wrapped in a scroll area"""
+        """Right control panel wrapped in a scroll area."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setMinimumWidth(260)
@@ -675,14 +709,14 @@ class MainWindow(QMainWindow):
         row1 = QHBoxLayout()
         row1.setSpacing(8)
         self.btn_start = QPushButton("开始检测")
-        self.btn_start.setStyleSheet(self._btn_style('#10b981', '#059669'))
+        self.btn_start.setStyleSheet(self._btn_style("#10b981", "#059669"))
         self.btn_start.setMinimumHeight(38)
         self.btn_start.clicked.connect(self._start)
         row1.addWidget(self.btn_start)
 
         self.btn_stop = QPushButton("停止")
         self.btn_stop.setEnabled(False)
-        self.btn_stop.setStyleSheet(self._btn_style('#ef4444', '#dc2626'))
+        self.btn_stop.setStyleSheet(self._btn_style("#ef4444", "#dc2626"))
         self.btn_stop.setMinimumHeight(38)
         self.btn_stop.clicked.connect(self._stop)
         row1.addWidget(self.btn_stop)
@@ -695,17 +729,17 @@ class MainWindow(QMainWindow):
         int_lay.setSpacing(6)
 
         self.btn_emergency = QPushButton("电梯急停")
-        self.btn_emergency.setStyleSheet(self._btn_style('#ef4444', '#dc2626'))
+        self.btn_emergency.setStyleSheet(self._btn_style("#ef4444", "#dc2626"))
         self.btn_emergency.clicked.connect(self._emergency_stop)
         int_lay.addWidget(self.btn_emergency, 0, 0)
 
         self.btn_call_staff = QPushButton("呼叫工作人员")
-        self.btn_call_staff.setStyleSheet(self._btn_style('#f59e0b', '#d97706'))
+        self.btn_call_staff.setStyleSheet(self._btn_style("#f59e0b", "#d97706"))
         self.btn_call_staff.clicked.connect(self._call_staff)
         int_lay.addWidget(self.btn_call_staff, 0, 1)
 
         self.btn_dismiss = QPushButton("解除警报")
-        self.btn_dismiss.setStyleSheet(self._btn_style('#6b7280', '#4b5563'))
+        self.btn_dismiss.setStyleSheet(self._btn_style("#6b7280", "#4b5563"))
         self.btn_dismiss.clicked.connect(self._dismiss_alert)
         int_lay.addWidget(self.btn_dismiss, 1, 0, 1, 2)
 
@@ -727,8 +761,7 @@ class MainWindow(QMainWindow):
         yolo_lay.addWidget(self.conf_slider, 0, 1)
         self.conf_label = QLabel("0.50")
         self.conf_label.setStyleSheet("color: #4f46e5; font-weight: bold; font-size: 12px; border: none;")
-        self.conf_slider.valueChanged.connect(
-            lambda v: self.conf_label.setText(f"{v / 100:.2f}"))
+        self.conf_slider.valueChanged.connect(lambda v: self.conf_label.setText(f"{v / 100:.2f}"))
         yolo_lay.addWidget(self.conf_label, 0, 2)
 
         # row 1: skeleton keypoint confidence
@@ -740,8 +773,7 @@ class MainWindow(QMainWindow):
         yolo_lay.addWidget(self.skel_conf_slider, 1, 1)
         self.skel_conf_label = QLabel("0.30")
         self.skel_conf_label.setStyleSheet("color: #4f46e5; font-weight: bold; font-size: 12px; border: none;")
-        self.skel_conf_slider.valueChanged.connect(
-            lambda v: self.skel_conf_label.setText(f"{v / 100:.2f}"))
+        self.skel_conf_slider.valueChanged.connect(lambda v: self.skel_conf_label.setText(f"{v / 100:.2f}"))
         yolo_lay.addWidget(self.skel_conf_label, 1, 2)
 
         # row 2: frame skip
@@ -753,8 +785,7 @@ class MainWindow(QMainWindow):
         yolo_lay.addWidget(self.frame_skip_slider, 2, 1)
         self.frame_skip_label = QLabel("1帧")
         self.frame_skip_label.setStyleSheet("color: #4f46e5; font-weight: bold; font-size: 12px; border: none;")
-        self.frame_skip_slider.valueChanged.connect(
-            lambda v: self.frame_skip_label.setText(f"{v}帧"))
+        self.frame_skip_slider.valueChanged.connect(lambda v: self.frame_skip_label.setText(f"{v}帧"))
         yolo_lay.addWidget(self.frame_skip_label, 2, 2)
 
         # row 3: alert cooldown
@@ -766,8 +797,7 @@ class MainWindow(QMainWindow):
         yolo_lay.addWidget(self.cooldown_slider, 3, 1)
         self.cooldown_label = QLabel("3秒")
         self.cooldown_label.setStyleSheet("color: #4f46e5; font-weight: bold; font-size: 12px; border: none;")
-        self.cooldown_slider.valueChanged.connect(
-            lambda v: self.cooldown_label.setText(f"{v}秒"))
+        self.cooldown_slider.valueChanged.connect(lambda v: self.cooldown_label.setText(f"{v}秒"))
         yolo_lay.addWidget(self.cooldown_label, 3, 2)
 
         # row 4: recall rate / detection sensitivity
@@ -785,15 +815,21 @@ class MainWindow(QMainWindow):
         stats_lay = QGridLayout(stats_group)
         stats_lay.setSpacing(4)
         self.stats_labels = {}
-        for idx, (key, cn, color) in enumerate([
-            ('normal', '正常', '#10b981'), ('running', '奔跑', '#ef4444'),
-            ('reverse', '逆行', '#ef4444'), ('falling', '摔倒', '#ef4444'),
-            ('loitering', '滞留', '#ef4444'), ('sitting', '坐下', '#f59e0b'),
-        ]):
+        for idx, (key, cn, color) in enumerate(
+            [
+                ("normal", "正常", "#10b981"),
+                ("running", "奔跑", "#ef4444"),
+                ("reverse", "逆行", "#ef4444"),
+                ("falling", "摔倒", "#ef4444"),
+                ("loitering", "滞留", "#ef4444"),
+                ("sitting", "坐下", "#f59e0b"),
+            ]
+        ):
             row, col = divmod(idx, 2)
             lbl = QLabel(f"{cn}: 0")
             lbl.setStyleSheet(
-                f"color: {color}; font-size: 13px; font-weight: bold; border: none; background: transparent;")
+                f"color: {color}; font-size: 13px; font-weight: bold; border: none; background: transparent;"
+            )
             self.stats_labels[key] = lbl
             stats_lay.addWidget(lbl, row, col)
         ctrl_lay.addWidget(stats_group)
@@ -805,13 +841,12 @@ class MainWindow(QMainWindow):
         return scroll
 
     def _create_bottom_panel(self):
-        """Bottom alert table panel"""
+        """Bottom alert table panel."""
         panel = QWidget()
         panel.setObjectName("bottomPanel")
         panel.setMinimumHeight(140)
         panel.setMaximumHeight(360)
-        panel.setStyleSheet(
-            "QWidget#bottomPanel { background: #1a1a2e; border-top: 1px solid #2a2a4a; }")
+        panel.setStyleSheet("QWidget#bottomPanel { background: #1a1a2e; border-top: 1px solid #2a2a4a; }")
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -834,7 +869,8 @@ class MainWindow(QMainWindow):
         clear_btn.setStyleSheet(
             "QPushButton { background: #252540; color: #8b8ba0; border: none; "
             "border-radius: 4px; font-size: 11px; padding: 2px 12px; }"
-            "QPushButton:hover { background: #35355a; color: #fff; }")
+            "QPushButton:hover { background: #35355a; color: #fff; }"
+        )
         hdr.addWidget(clear_btn)
         layout.addLayout(hdr)
 
@@ -845,14 +881,13 @@ class MainWindow(QMainWindow):
         self.alert_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.alert_table.verticalHeader().setVisible(False)
         self.alert_table.setAlternatingRowColors(True)
-        self.alert_table.setStyleSheet(
-            "QTableWidget { alternate-background-color: #14142b; }")
+        self.alert_table.setStyleSheet("QTableWidget { alternate-background-color: #14142b; }")
         layout.addWidget(self.alert_table)
 
         return panel
 
     def _setup_video_grid(self, count=None, layout_mode=None):
-        """Setup/reset the video grid with given count and layout mode"""
+        """Setup/reset the video grid with given count and layout mode."""
         if count is None:
             count = max(len(self.video_sources), 1)
         if layout_mode is None:
@@ -865,8 +900,8 @@ class MainWindow(QMainWindow):
         self.video_labels.clear()
 
         # determine grid structure
-        if layout_mode == '1x1':
-            cols, rows = 1, 1
+        if layout_mode == "1x1":
+            cols, _rows = 1, 1
             show_count = 1
             active = self.active_video_idx
             for i in range(show_count):
@@ -874,8 +909,8 @@ class MainWindow(QMainWindow):
                 vl = VideoLabel(vid_idx)
                 self.video_labels.append(vl)
                 self.video_grid.addWidget(vl, 0, 0)
-        elif layout_mode == '1+2':
-            cols, rows = 2, 2
+        elif layout_mode == "1+2":
+            cols, _rows = 2, 2
             show_count = min(count, 3)
             active = min(self.active_video_idx, count - 1)
             # video 0 (active) spans 2 rows
@@ -892,9 +927,9 @@ class MainWindow(QMainWindow):
             self.video_grid.setColumnStretch(1, 1)
         else:  # '2x2' or 'auto'
             if count <= 2:
-                cols, rows = count, 1
+                cols, _rows = count, 1
             else:
-                cols, rows = 2, (count + 1) // 2
+                cols, _rows = 2, (count + 1) // 2
             show_count = min(count, 4)
             for i in range(show_count):
                 vl = VideoLabel(i)
@@ -909,27 +944,26 @@ class MainWindow(QMainWindow):
             elif i < len(self.video_labels):
                 idx = self.video_labels[i].video_idx
                 if idx < len(self.video_sources):
-                    self.video_labels[i].setText(
-                        f"{self.video_sources[idx][0]}\n待开始检测")
+                    self.video_labels[i].setText(f"{self.video_sources[idx][0]}\n待开始检测")
 
     def _switch_layout(self, mode):
-        """Switch video grid layout mode"""
+        """Switch video grid layout mode."""
         self.layout_mode = mode
         for m, btn in self.layout_btns.items():
             btn.setChecked(m == mode)
         self._setup_video_grid(layout_mode=mode)
 
     def _toggle_left_panel(self):
-        """Toggle left panel visibility"""
+        """Toggle left panel visibility."""
         self.left_panel_visible = not self.left_panel_visible
         self.left_panel_widget.setVisible(self.left_panel_visible)
         self.btn_toggle_left.setText("◀" if self.left_panel_visible else "▶")
 
     def _on_video_selected(self, row):
-        """Handle video selection from list"""
+        """Handle video selection from list."""
         if row >= 0 and row < len(self.video_sources):
             self.active_video_idx = row
-            if self.layout_mode in ('1x1', '1+2'):
+            if self.layout_mode in ("1x1", "1+2"):
                 self._setup_video_grid(layout_mode=self.layout_mode)
 
     def _clear_alerts(self):
@@ -941,8 +975,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "最多支持4路视频")
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择视频文件", "",
-            "视频文件 (*.mp4 *.avi *.mov *.mkv *.flv);;所有文件 (*.*)")
+            self, "选择视频文件", "", "视频文件 (*.mp4 *.avi *.mov *.mkv *.flv);;所有文件 (*.*)"
+        )
         if not path:
             return
         self.video_sources.append((os.path.basename(path), path, False))
@@ -1017,14 +1051,16 @@ class MainWindow(QMainWindow):
             "border: 1px solid #2a2a4a; border-radius: 8px; "
             "margin-top: 14px; padding: 16px 10px 10px 10px; background: #1a1a2e; }"
             "QGroupBox::title { subcontrol-origin: margin; left: 14px; "
-            "padding: 0 8px; color: #8b8ba0; }")
+            "padding: 0 8px; color: #8b8ba0; }"
+        )
 
     def _btn_style(self, bg, hover):
         return (
             f"QPushButton {{ background: {bg}; color: white; border: none; "
             f"padding: 10px; border-radius: 6px; font-size: 13px; font-weight: bold; }}"
             f"QPushButton:hover {{ background: {hover}; }}"
-            f"QPushButton:disabled {{ background: #3b3b52; color: #606070; }}")
+            f"QPushButton:disabled {{ background: #3b3b52; color: #606070; }}"
+        )
 
     # ========== 控制逻辑 ==========
     def _start(self):
@@ -1038,14 +1074,12 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
         print("[GUI] 加载 YOLO...")
-        self.pose_model = YOLO('yolov8n-pose.pt')
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.escalator_direction = 'up' if self.dir_combo.currentIndex() == 0 else 'down'
+        self.pose_model = YOLO("yolov8n-pose.pt")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.escalator_direction = "up" if self.dir_combo.currentIndex() == 0 else "down"
         print(f"[GUI] 加载 ST-GCN (device={device})...")
         self.action_recognizer = ActionRecognizer(
-            weight_path='st_gcn.kinetics.pt',
-            escalator_direction=self.escalator_direction,
-            device=device
+            weight_path="st_gcn.kinetics.pt", escalator_direction=self.escalator_direction, device=device
         )
         self.conf_threshold = self.conf_slider.value() / 100.0
         self.skeleton_conf = self.skel_conf_slider.value() / 100.0
@@ -1116,7 +1150,7 @@ class MainWindow(QMainWindow):
     def _process_tick(self):
         if not self.running or not self.caps:
             return
-        if getattr(self, '_busy', False):
+        if getattr(self, "_busy", False):
             return
         self._busy = True
 
@@ -1157,8 +1191,9 @@ class MainWindow(QMainWindow):
         h, w = frame.shape[:2]
         roi = self.rois.get(idx, None)
 
-        results = self.pose_model.track(frame, persist=True, tracker='bytetrack.yaml',
-                                        conf=self.conf_threshold, verbose=False)
+        results = self.pose_model.track(
+            frame, persist=True, tracker="bytetrack.yaml", conf=self.conf_threshold, verbose=False
+        )
         annotated = frame.copy()
         cur_ids = set()
 
@@ -1173,9 +1208,7 @@ class MainWindow(QMainWindow):
                     ctr = np.array([(b[0] + b[2]) / 2, (b[1] + b[3]) / 2])
                     if not is_in_roi(ctr, roi):
                         continue
-                    all_persons.append({
-                        'track_id': tid, 'bbox': b, 'kpts': kpts_arr[j], 'center': ctr
-                    })
+                    all_persons.append({"track_id": tid, "bbox": b, "kpts": kpts_arr[j], "center": ctr})
 
         for r in results:
             if r.boxes is None or r.boxes.id is None:
@@ -1193,15 +1226,14 @@ class MainWindow(QMainWindow):
                 cur_ids.add(tid)
                 kpts = kpts_arr[j]
                 bbox = boxes[j]
-                others = [p for p in all_persons if p['track_id'] != tid]
+                others = [p for p in all_persons if p["track_id"] != tid]
                 self.track_hists[idx][tid].append(kpts.copy())
 
                 if tid not in self.track_last[idx]:
-                    self.track_last[idx][tid] = 'normal'
+                    self.track_last[idx][tid] = "normal"
 
                 action_en, action_cn, conf = self.action_recognizer.predict(
-                    tid, list(self.track_hists[idx][tid]), bbox, (h, w),
-                    all_persons=others
+                    tid, list(self.track_hists[idx][tid]), bbox, (h, w), all_persons=others
                 )
                 self.track_last[idx][tid] = action_en
                 self.counters[idx][action_cn] += 1
@@ -1226,9 +1258,8 @@ class MainWindow(QMainWindow):
 
                 x1, y1, x2, y2 = map(int, bbox)
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                label = f'ID:{tid} {action_cn}'
-                annotated = cv2_draw_chinese(annotated, label, (x1, max(y1 - 28, 0)),
-                                             font_size=18, color=color)
+                label = f"ID:{tid} {action_cn}"
+                annotated = cv2_draw_chinese(annotated, label, (x1, max(y1 - 28, 0)), font_size=18, color=color)
 
         gone = set(self.track_hists[idx].keys()) - cur_ids
         for tid in gone:
@@ -1240,9 +1271,11 @@ class MainWindow(QMainWindow):
         total = len(cur_ids)
         annotated = cv2_draw_chinese(
             annotated,
-            f"[{self.names[idx]}] 行人:{total} | "
-            f"{'上行' if self.escalator_direction == 'up' else '下行'}",
-            (10, 8), font_size=18, color=(255, 255, 255))
+            f"[{self.names[idx]}] 行人:{total} | {'上行' if self.escalator_direction == 'up' else '下行'}",
+            (10, 8),
+            font_size=18,
+            color=(255, 255, 255),
+        )
 
         now = time.time()
         dt = max(now - self.prev_ts[idx], 0.001)
@@ -1276,7 +1309,7 @@ class MainWindow(QMainWindow):
     def _on_alert(self, video_idx, timestamp, track_id, action_cn, confidence):
         if self.emergency_stop_active:
             return
-        row = self.alert_table.rowCount()
+        self.alert_table.rowCount()
         self.alert_table.insertRow(0)
 
         items = [
@@ -1289,13 +1322,13 @@ class MainWindow(QMainWindow):
         for c, item in enumerate(items):
             self.alert_table.setItem(0, c, item)
 
-        if action_cn in ['奔跑', '逆行', '摔倒', '滞留']:
+        if action_cn in ["奔跑", "逆行", "摔倒", "滞留"]:
             for c in range(5):
-                self.alert_table.item(0, c).setForeground(QColor('#ef4444'))
+                self.alert_table.item(0, c).setForeground(QColor("#ef4444"))
             self._start_alarm()
-        elif action_cn == '坐下':
+        elif action_cn == "坐下":
             for c in range(5):
-                self.alert_table.item(0, c).setForeground(QColor('#f59e0b'))
+                self.alert_table.item(0, c).setForeground(QColor("#f59e0b"))
 
         while self.alert_table.rowCount() > 100:
             self.alert_table.removeRow(self.alert_table.rowCount() - 1)
@@ -1304,14 +1337,14 @@ class MainWindow(QMainWindow):
     def _start_alarm(self):
         if self.emergency_stop_active:
             return
-        if hasattr(self, '_alarm_thread') and self._alarm_thread and self._alarm_thread.is_alive():
+        if hasattr(self, "_alarm_thread") and self._alarm_thread and self._alarm_thread.is_alive():
             return
         self._alarm_stop = threading.Event()
         self._alarm_thread = threading.Thread(target=play_alarm_sound, args=(self._alarm_stop,), daemon=True)
         self._alarm_thread.start()
 
     def _stop_alarm(self):
-        if hasattr(self, '_alarm_stop'):
+        if hasattr(self, "_alarm_stop"):
             self._alarm_stop.set()
 
     def _call_staff(self):
@@ -1361,13 +1394,14 @@ class MainWindow(QMainWindow):
 
     def _export_report(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出报告", f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            "文本文件 (*.txt)")
+            self, "导出报告", f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", "文本文件 (*.txt)"
+        )
         if not path:
             return
         try:
-            from database import get_recent_alerts, get_alert_stats
-            with open(path, 'w', encoding='utf-8') as f:
+            from database import get_alert_stats, get_recent_alerts
+
+            with open(path, "w", encoding="utf-8") as f:
                 f.write("=" * 50 + "\n")
                 f.write("自动扶梯行人安全检测系统 - 检测报告\n")
                 f.write(f"导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -1384,11 +1418,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"导出失败: {e}")
 
     def _about(self):
-        QMessageBox.about(self, "关于",
-                          "自动扶梯行人安全检测系统 v2.0\n\n"
-                          "技术栈: YOLOv8-Pose + ByteTrack + ST-GCN\n"
-                          "使用规则判别 + 深度学习混合方案\n\n"
-                          "功能: 多路视频监控 | ROI区域检测 | 声音报警 | 干预控制")
+        QMessageBox.about(
+            self,
+            "关于",
+            "自动扶梯行人安全检测系统 v2.0\n\n"
+            "技术栈: YOLOv8-Pose + ByteTrack + ST-GCN\n"
+            "使用规则判别 + 深度学习混合方案\n\n"
+            "功能: 多路视频监控 | ROI区域检测 | 声音报警 | 干预控制",
+        )
 
     def closeEvent(self, event):
         self._stop_alarm()
@@ -1406,7 +1443,7 @@ class MainWindow(QMainWindow):
 def main():
     init_db()
     app = QApplication(sys.argv)
-    app.setStyle('Fusion')
+    app.setStyle("Fusion")
     app.setStyleSheet(DARK_QSS)
     app.setFont(QFont("Microsoft YaHei", 10))
 
@@ -1419,5 +1456,5 @@ def main():
     sys.exit(app.exec_())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
