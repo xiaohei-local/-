@@ -1,16 +1,18 @@
 # main.py
+from collections import deque
+
 import cv2
 import torch
-from collections import deque
-from ultralytics import YOLO
 from stgcn_inference import ActionRecognizer
 
+from ultralytics import YOLO
+
 # ========== 配置参数 ==========
-VIDEO_PATH = 'pose_test1.mp4'          # 输入视频路径
-TRACKER_CONFIG = 'bytetrack_custom.yaml' # ByteTrack配置文件路径
-CONFIDENCE_THRESHOLD = 0.5             # 检测置信度阈值
-ACTION_BUFFER_SIZE = 30                # 动作识别所需帧数（1秒30帧）
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+VIDEO_PATH = "pose_test1.mp4"  # 输入视频路径
+TRACKER_CONFIG = "bytetrack_custom.yaml"  # ByteTrack配置文件路径
+CONFIDENCE_THRESHOLD = 0.5  # 检测置信度阈值
+ACTION_BUFFER_SIZE = 30  # 动作识别所需帧数（1秒30帧）
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ========== 动作标签映射（根据你的模型调整）==========
 # Kinetics-400数据集的类别映射示例
@@ -25,7 +27,7 @@ ACTION_LABELS = {
 }
 # ========== 初始化组件 ==========
 print("正在加载YOLOv8-Pose模型...")
-yolo_model = YOLO('yolov8n-pose.pt')
+yolo_model = YOLO("yolov8n-pose.pt")
 
 print("正在加载ST-GCN模型...")
 action_recognizer = ActionRecognizer(device=DEVICE)
@@ -46,13 +48,7 @@ while cap.isOpened():
         break
 
     # 1. YOLOV8检测 + ByteTrack跟踪
-    results = yolo_model.track(
-        frame,
-        persist=True,
-        tracker=TRACKER_CONFIG,
-        conf=CONFIDENCE_THRESHOLD,
-        iou=0.5
-    )
+    results = yolo_model.track(frame, persist=True, tracker=TRACKER_CONFIG, conf=CONFIDENCE_THRESHOLD, iou=0.5)
 
     # 2. 处理检测结果
     if results[0].boxes is not None and results[0].boxes.id is not None:
@@ -77,9 +73,7 @@ while cap.isOpened():
             # 4. 当队列满时进行ST-GCN推理
             if len(pose_buffers[track_id]) == ACTION_BUFFER_SIZE:
                 # 执行动作识别
-                action_id, confidence = action_recognizer.predict(
-                    list(pose_buffers[track_id])
-                )
+                action_id, confidence = action_recognizer.predict(list(pose_buffers[track_id]))
 
                 # 获取动作标签
                 action_name = ACTION_LABELS.get(action_id, f"Unknown({action_id})")
@@ -88,10 +82,7 @@ while cap.isOpened():
                 if track_id in id_to_box:
                     x1, y1, x2, y2 = id_to_box[track_id].astype(int)
                     text = f"ID:{track_id} | {action_name} ({confidence:.2f})"
-                    cv2.putText(
-                        frame, text, (x1, y1 - 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
-                    )
+                    cv2.putText(frame, text, (x1, y1 - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
                 # 可选：滑窗预测（保留最后10帧，继续累积新帧）
                 # for _ in range(10):
@@ -101,14 +92,11 @@ while cap.isOpened():
         for tid, box in id_to_box.items():
             x1, y1, x2, y2 = box.astype(int)
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(
-                frame, f'ID: {tid}', (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2
-            )
+            cv2.putText(frame, f"ID: {tid}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
 
     # 7. 显示结果
-    cv2.imshow('YOLOv8 + ByteTrack + ST-GCN', frame)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
+    cv2.imshow("YOLOv8 + ByteTrack + ST-GCN", frame)
+    if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
     frame_id += 1
