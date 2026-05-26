@@ -1,39 +1,56 @@
 """
 自动扶梯行人安全检测系统 — PyQt5 可视化界面
-功能: 多路视频网格监控 + ROI区域检测 + 声音报警 + 干预按钮
+功能: 多路视频网格监控 + ROI区域检测 + 声音报警 + 干预按钮.
 """
-import sys
+
 import os
+import sys
+import threading
+import time
+from collections import defaultdict, deque
+from datetime import datetime
+
 import cv2
 import numpy as np
 import torch
-import time
-import threading
-from collections import deque, defaultdict
-from datetime import datetime
-
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QDialog, QLabel, QPushButton, QLineEdit,
-    QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QTableWidget,
-    QTableWidgetItem, QHeaderView, QSlider, QComboBox, QFileDialog,
-    QMessageBox, QWidget, QListWidget, QStatusBar, QToolBar, QAction,
-    QAbstractItemView
-)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, QRect
-from PyQt5.QtGui import QImage, QPixmap, QFont, QColor, QPainter, QPen
-
-from ultralytics import YOLO
 from PIL import Image, ImageDraw, ImageFont
-
-from database import init_db, verify_login, register_user, log_alert
-from action_recognition import (
-    ActionRecognizer, ACTION_CN, DANGER_ACTIONS, CAUTION_ACTIONS
+from PyQt5.QtCore import QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QAction,
+    QApplication,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSlider,
+    QStatusBar,
+    QTableWidget,
+    QTableWidgetItem,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
 )
+
+from action_recognition import ACTION_CN, CAUTION_ACTIONS, DANGER_ACTIONS, ActionRecognizer
+from database import init_db, log_alert, register_user, verify_login
+from ultralytics import YOLO
 
 
 def play_alarm_sound(stop_event):
     try:
         import winsound
+
         for _ in range(6):
             if stop_event.is_set():
                 return
@@ -46,15 +63,26 @@ def play_alarm_sound(stop_event):
 
 
 SKELETON = [
-    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
-    (5, 11), (6, 12), (11, 12),
-    (11, 13), (13, 15), (12, 14), (14, 16),
-    (0, 1), (0, 2), (1, 3), (2, 4)
+    (5, 6),
+    (5, 7),
+    (7, 9),
+    (6, 8),
+    (8, 10),
+    (5, 11),
+    (6, 12),
+    (11, 12),
+    (11, 13),
+    (13, 15),
+    (12, 14),
+    (14, 16),
+    (0, 1),
+    (0, 2),
+    (1, 3),
+    (2, 4),
 ]
 
 FONT_PATH = None
-for c in ['simhei.ttf', 'C:/Windows/Fonts/simhei.ttf',
-          'C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/simsun.ttc']:
+for c in ["simhei.ttf", "C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simsun.ttc"]:
     if os.path.exists(c):
         FONT_PATH = c
         break
@@ -87,8 +115,7 @@ def draw_roi(img, roi):
     if roi is not None:
         rx1, ry1, rx2, ry2 = roi
         cv2.rectangle(img, (rx1, ry1), (rx2, ry2), (255, 200, 0), 2)
-        cv2.putText(img, 'ROI', (rx1, ry1 - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 0), 1)
+        cv2.putText(img, "ROI", (rx1, ry1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 0), 1)
     return img
 
 
@@ -163,7 +190,7 @@ class LoginWindow(QDialog):
         if not username or not password:
             self.msg_label.setText("请输入用户名和密码")
             return
-        ok, role = verify_login(username, password)
+        ok, _role = verify_login(username, password)
         if ok:
             self.accept()
         else:
@@ -290,7 +317,7 @@ class MainWindow(QMainWindow):
         self.prev_ts = []
         self.rr = 0
         self.conf_threshold = 0.5
-        self.escalator_direction = 'up'
+        self.escalator_direction = "up"
         self.seq_length = 16
 
         self.video_labels = []
@@ -352,13 +379,13 @@ class MainWindow(QMainWindow):
         ctrl_layout.addWidget(self.source_list, 1, 0, 1, 2)
 
         self.btn_start = QPushButton("开始检测")
-        self.btn_start.setStyleSheet(self._btn_style('#10b981', '#059669'))
+        self.btn_start.setStyleSheet(self._btn_style("#10b981", "#059669"))
         self.btn_start.clicked.connect(self._start)
         ctrl_layout.addWidget(self.btn_start, 2, 0)
 
         self.btn_stop = QPushButton("停止")
         self.btn_stop.setEnabled(False)
-        self.btn_stop.setStyleSheet(self._btn_style('#ef4444', '#dc2626'))
+        self.btn_stop.setStyleSheet(self._btn_style("#ef4444", "#dc2626"))
         self.btn_stop.clicked.connect(self._stop)
         ctrl_layout.addWidget(self.btn_stop, 2, 1)
 
@@ -370,8 +397,7 @@ class MainWindow(QMainWindow):
         self.conf_label = QLabel("0.50")
         ctrl_layout.addWidget(self.conf_slider, 3, 1)
         ctrl_layout.addWidget(self.conf_label, 4, 1)
-        self.conf_slider.valueChanged.connect(
-            lambda v: self.conf_label.setText(f"{v / 100:.2f}"))
+        self.conf_slider.valueChanged.connect(lambda v: self.conf_label.setText(f"{v / 100:.2f}"))
 
         ctrl_layout.addWidget(QLabel("扶梯方向:"), 4, 0)
         self.dir_combo = QComboBox()
@@ -379,17 +405,17 @@ class MainWindow(QMainWindow):
         ctrl_layout.addWidget(self.dir_combo, 4, 1)
 
         self.btn_call_staff = QPushButton("呼叫工作人员")
-        self.btn_call_staff.setStyleSheet(self._btn_style('#f59e0b', '#d97706'))
+        self.btn_call_staff.setStyleSheet(self._btn_style("#f59e0b", "#d97706"))
         self.btn_call_staff.clicked.connect(self._call_staff)
         ctrl_layout.addWidget(self.btn_call_staff, 5, 0)
 
         self.btn_emergency = QPushButton("电梯急停")
-        self.btn_emergency.setStyleSheet(self._btn_style('#ef4444', '#dc2626'))
+        self.btn_emergency.setStyleSheet(self._btn_style("#ef4444", "#dc2626"))
         self.btn_emergency.clicked.connect(self._emergency_stop)
         ctrl_layout.addWidget(self.btn_emergency, 5, 1)
 
         self.btn_dismiss = QPushButton("解除警报")
-        self.btn_dismiss.setStyleSheet(self._btn_style('#6b7280', '#4b5563'))
+        self.btn_dismiss.setStyleSheet(self._btn_style("#6b7280", "#4b5563"))
         self.btn_dismiss.clicked.connect(self._dismiss_alert)
         ctrl_layout.addWidget(self.btn_dismiss, 6, 0, 1, 2)
 
@@ -417,11 +443,16 @@ class MainWindow(QMainWindow):
         self.stats_layout = QGridLayout(stats_group)
         self.stats_layout.setSpacing(4)
         self.stats_labels = {}
-        for idx, (key, cn, color) in enumerate([
-            ('normal', '正常', '#10b981'), ('running', '奔跑', '#ef4444'),
-            ('reverse', '逆行', '#ef4444'), ('falling', '摔倒', '#ef4444'),
-            ('loitering', '滞留', '#ef4444'), ('sitting', '坐下', '#f59e0b'),
-        ]):
+        for idx, (key, cn, color) in enumerate(
+            [
+                ("normal", "正常", "#10b981"),
+                ("running", "奔跑", "#ef4444"),
+                ("reverse", "逆行", "#ef4444"),
+                ("falling", "摔倒", "#ef4444"),
+                ("loitering", "滞留", "#ef4444"),
+                ("sitting", "坐下", "#f59e0b"),
+            ]
+        ):
             row, col = divmod(idx, 2)
             lbl = QLabel(f"{cn}: 0")
             lbl.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: bold;")
@@ -439,9 +470,9 @@ class MainWindow(QMainWindow):
             lbl.deleteLater()
         self.video_labels.clear()
         if count <= 2:
-            cols, rows = count, 1
+            cols, _rows = count, 1
         else:
-            cols, rows = 2, (count + 1) // 2
+            cols, _rows = 2, (count + 1) // 2
         for i in range(count):
             vl = VideoLabel(i)
             vl.setText(f"视频源 {i + 1}\n请添加视频文件")
@@ -454,8 +485,8 @@ class MainWindow(QMainWindow):
 
     def _add_video_source(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择视频文件", "",
-            "视频文件 (*.mp4 *.avi *.mov *.mkv *.flv);;所有文件 (*.*)")
+            self, "选择视频文件", "", "视频文件 (*.mp4 *.avi *.mov *.mkv *.flv);;所有文件 (*.*)"
+        )
         if not path:
             return
         self.video_sources.append((os.path.basename(path), path, False))
@@ -534,19 +565,17 @@ class MainWindow(QMainWindow):
 
         # 主线程加载模型（与命令行版 YOLO + ByteTrack + ST-GCN.py 一致）
         print("[GUI] 加载 YOLO...")
-        self.pose_model = YOLO('yolov8n-pose.pt')
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.escalator_direction = 'up' if self.dir_combo.currentIndex() == 0 else 'down'
+        self.pose_model = YOLO("yolov8n-pose.pt")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.escalator_direction = "up" if self.dir_combo.currentIndex() == 0 else "down"
         print(f"[GUI] 加载 ST-GCN (device={device})...")
         self.action_recognizer = ActionRecognizer(
-            weight_path='st_gcn.kinetics.pt',
-            escalator_direction=self.escalator_direction,
-            device=device
+            weight_path="st_gcn.kinetics.pt", escalator_direction=self.escalator_direction, device=device
         )
         self.conf_threshold = self.conf_slider.value() / 100.0
 
         # 主线程打开视频（与命令行版一致）
-        num = len(self.video_sources)
+        len(self.video_sources)
         self.caps = []
         self.names = []
         self.rois = {}
@@ -603,7 +632,7 @@ class MainWindow(QMainWindow):
         # 防重入：上一帧处理未完成时跳过本次 tick
         if not self.running or not self.caps:
             return
-        if getattr(self, '_busy', False):
+        if getattr(self, "_busy", False):
             return
         self._busy = True
 
@@ -631,8 +660,9 @@ class MainWindow(QMainWindow):
         h, w = frame.shape[:2]
         roi = self.rois.get(idx, None)
 
-        results = self.pose_model.track(frame, persist=True, tracker='bytetrack.yaml',
-                                        conf=self.conf_threshold, verbose=False)
+        results = self.pose_model.track(
+            frame, persist=True, tracker="bytetrack.yaml", conf=self.conf_threshold, verbose=False
+        )
         annotated = frame.copy()
         cur_ids = set()
 
@@ -647,9 +677,7 @@ class MainWindow(QMainWindow):
                     ctr = np.array([(b[0] + b[2]) / 2, (b[1] + b[3]) / 2])
                     if not is_in_roi(ctr, roi):
                         continue
-                    all_persons.append({
-                        'track_id': tid, 'bbox': b, 'kpts': kpts_arr[j], 'center': ctr
-                    })
+                    all_persons.append({"track_id": tid, "bbox": b, "kpts": kpts_arr[j], "center": ctr})
 
         for r in results:
             if r.boxes is None or r.boxes.id is None:
@@ -667,15 +695,14 @@ class MainWindow(QMainWindow):
                 cur_ids.add(tid)
                 kpts = kpts_arr[j]
                 bbox = boxes[j]
-                others = [p for p in all_persons if p['track_id'] != tid]
+                others = [p for p in all_persons if p["track_id"] != tid]
                 self.track_hists[idx][tid].append(kpts.copy())
 
                 if tid not in self.track_last[idx]:
-                    self.track_last[idx][tid] = 'normal'
+                    self.track_last[idx][tid] = "normal"
 
                 action_en, action_cn, conf = self.action_recognizer.predict(
-                    tid, list(self.track_hists[idx][tid]), bbox, (h, w),
-                    all_persons=others
+                    tid, list(self.track_hists[idx][tid]), bbox, (h, w), all_persons=others
                 )
                 self.track_last[idx][tid] = action_en
                 self.counters[idx][action_cn] += 1
@@ -700,9 +727,8 @@ class MainWindow(QMainWindow):
 
                 x1, y1, x2, y2 = map(int, bbox)
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                label = f'ID:{tid} {action_cn}'
-                annotated = cv2_draw_chinese(annotated, label, (x1, max(y1 - 28, 0)),
-                                             font_size=18, color=color)
+                label = f"ID:{tid} {action_cn}"
+                annotated = cv2_draw_chinese(annotated, label, (x1, max(y1 - 28, 0)), font_size=18, color=color)
 
         # 清理
         gone = set(self.track_hists[idx].keys()) - cur_ids
@@ -716,7 +742,10 @@ class MainWindow(QMainWindow):
         annotated = cv2_draw_chinese(
             annotated,
             f"[{self.names[idx]}] 行人:{total} | {'上行' if self.escalator_direction == 'up' else '下行'}",
-            (10, 8), font_size=18, color=(255, 255, 255))
+            (10, 8),
+            font_size=18,
+            color=(255, 255, 255),
+        )
 
         # FPS
         now = time.time()
@@ -752,33 +781,33 @@ class MainWindow(QMainWindow):
     def _on_alert(self, video_idx, timestamp, track_id, action_cn, confidence):
         if self.emergency_stop_active:
             return
-        row = self.alert_table.rowCount()
+        self.alert_table.rowCount()
         self.alert_table.insertRow(0)
         self.alert_table.setItem(0, 0, QTableWidgetItem(timestamp))
         self.alert_table.setItem(0, 1, QTableWidgetItem(str(track_id)))
         self.alert_table.setItem(0, 2, QTableWidgetItem(action_cn))
         self.alert_table.setItem(0, 3, QTableWidgetItem(f"{confidence:.2f}"))
-        if action_cn in ['奔跑', '逆行', '摔倒', '滞留']:
+        if action_cn in ["奔跑", "逆行", "摔倒", "滞留"]:
             for c in range(4):
-                self.alert_table.item(0, c).setForeground(QColor('#ef4444'))
+                self.alert_table.item(0, c).setForeground(QColor("#ef4444"))
             self._start_alarm()
-        elif action_cn == '坐下':
+        elif action_cn == "坐下":
             for c in range(4):
-                self.alert_table.item(0, c).setForeground(QColor('#f59e0b'))
+                self.alert_table.item(0, c).setForeground(QColor("#f59e0b"))
         while self.alert_table.rowCount() > 100:
             self.alert_table.removeRow(self.alert_table.rowCount() - 1)
 
     def _start_alarm(self):
         if self.emergency_stop_active:
             return
-        if hasattr(self, '_alarm_thread') and self._alarm_thread and self._alarm_thread.is_alive():
+        if hasattr(self, "_alarm_thread") and self._alarm_thread and self._alarm_thread.is_alive():
             return
         self._alarm_stop = threading.Event()
         self._alarm_thread = threading.Thread(target=play_alarm_sound, args=(self._alarm_stop,), daemon=True)
         self._alarm_thread.start()
 
     def _stop_alarm(self):
-        if hasattr(self, '_alarm_stop'):
+        if hasattr(self, "_alarm_stop"):
             self._alarm_stop.set()
 
     def _call_staff(self):
@@ -818,12 +847,14 @@ class MainWindow(QMainWindow):
 
     def _export_report(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出报告", f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", "文本文件 (*.txt)")
+            self, "导出报告", f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", "文本文件 (*.txt)"
+        )
         if not path:
             return
         try:
-            from database import get_recent_alerts, get_alert_stats
-            with open(path, 'w', encoding='utf-8') as f:
+            from database import get_alert_stats, get_recent_alerts
+
+            with open(path, "w", encoding="utf-8") as f:
                 f.write("=" * 50 + "\n")
                 f.write("自动扶梯行人安全检测系统 - 检测报告\n")
                 f.write(f"导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -839,11 +870,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"导出失败: {e}")
 
     def _about(self):
-        QMessageBox.about(self, "关于",
-                          "自动扶梯行人安全检测系统 v2.0\n\n"
-                          "技术栈: YOLOv8-Pose + ByteTrack + ST-GCN\n"
-                          "使用规则判别 + 深度学习混合方案\n\n"
-                          "功能: 多路视频监控 | ROI区域检测 | 声音报警 | 干预控制")
+        QMessageBox.about(
+            self,
+            "关于",
+            "自动扶梯行人安全检测系统 v2.0\n\n"
+            "技术栈: YOLOv8-Pose + ByteTrack + ST-GCN\n"
+            "使用规则判别 + 深度学习混合方案\n\n"
+            "功能: 多路视频监控 | ROI区域检测 | 声音报警 | 干预控制",
+        )
 
     def closeEvent(self, event):
         self._stop_alarm()
@@ -861,7 +895,7 @@ class MainWindow(QMainWindow):
 def main():
     init_db()
     app = QApplication(sys.argv)
-    app.setStyle('Fusion')
+    app.setStyle("Fusion")
     app.setFont(QFont("Microsoft YaHei", 10))
     login = LoginWindow()
     if login.exec_() != QDialog.Accepted:
@@ -871,5 +905,5 @@ def main():
     sys.exit(app.exec_())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
