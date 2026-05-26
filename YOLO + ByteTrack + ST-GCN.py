@@ -1,6 +1,6 @@
 """
 自动扶梯行人动作识别核心管线
-YOLOv8-Pose + ByteTrack + ST-GCN（规则+深度学习混合方案）
+YOLOv8-Pose + ByteTrack + ST-GCN（规则+深度学习混合方案）.
 
 用法：
     python "YOLO + ByteTrack + ST-GCN.py"                         # 默认视频 pose_test1.mp4
@@ -8,31 +8,46 @@ YOLOv8-Pose + ByteTrack + ST-GCN（规则+深度学习混合方案）
     python "YOLO + ByteTrack + ST-GCN.py" --camera                # 使用摄像头
     python "YOLO + ByteTrack + ST-GCN.py" --direction down        # 扶梯下行
 """
+
 import argparse
 import os
-from collections import deque, defaultdict
+from collections import defaultdict, deque
 
 import cv2
 import numpy as np
 import torch
-from ultralytics import YOLO
 from PIL import Image, ImageDraw, ImageFont
 
-from action_recognition import (
-    ActionRecognizer, ACTION_CN, DANGER_ACTIONS, CAUTION_ACTIONS
-)
+from action_recognition import CAUTION_ACTIONS, DANGER_ACTIONS, ActionRecognizer
+from ultralytics import YOLO
 
 # ==================== 骨骼连接关系 ====================
 SKELETON = [
-    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
-    (5, 11), (6, 12), (11, 12),
-    (11, 13), (13, 15), (12, 14), (14, 16),
-    (0, 1), (0, 2), (1, 3), (2, 4)
+    (5, 6),
+    (5, 7),
+    (7, 9),
+    (6, 8),
+    (8, 10),
+    (5, 11),
+    (6, 12),
+    (11, 12),
+    (11, 13),
+    (13, 15),
+    (12, 14),
+    (14, 16),
+    (0, 1),
+    (0, 2),
+    (1, 3),
+    (2, 4),
 ]
 
 FONT_PATH = None
-for candidate in ['simhei.ttf', 'C:/Windows/Fonts/simhei.ttf',
-                  'C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/simsun.ttc']:
+for candidate in [
+    "simhei.ttf",
+    "C:/Windows/Fonts/simhei.ttf",
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/simsun.ttc",
+]:
     if os.path.exists(candidate):
         FONT_PATH = candidate
         break
@@ -62,7 +77,7 @@ def draw_skeleton(img, keypoints, conf_thresh=0.5):
 
 
 class VideoProcessor:
-    """单路视频处理器：检测 + 跟踪 + 动作识别"""
+    """单路视频处理器：检测 + 跟踪 + 动作识别."""
 
     def __init__(self, source, pose_model, action_recognizer, seq_length=16):
         self.source = source
@@ -85,8 +100,7 @@ class VideoProcessor:
 
     def process(self, frame):
         h, w = frame.shape[:2]
-        results = self.pose_model.track(frame, persist=True, tracker='bytetrack.yaml',
-                                        conf=0.5, verbose=False)
+        results = self.pose_model.track(frame, persist=True, tracker="bytetrack.yaml", conf=0.5, verbose=False)
         annotated = frame.copy()
         current_track_ids = set()
         self.current_actions = []
@@ -99,10 +113,14 @@ class VideoProcessor:
                 keypoints = result.keypoints.data.cpu().numpy()
                 for i, tid in enumerate(track_ids):
                     b = boxes[i]
-                    all_persons_info.append({
-                        'track_id': tid, 'bbox': b, 'kpts': keypoints[i],
-                        'center': np.array([(b[0] + b[2]) / 2, (b[1] + b[3]) / 2])
-                    })
+                    all_persons_info.append(
+                        {
+                            "track_id": tid,
+                            "bbox": b,
+                            "kpts": keypoints[i],
+                            "center": np.array([(b[0] + b[2]) / 2, (b[1] + b[3]) / 2]),
+                        }
+                    )
 
         for result in results:
             if result.boxes is None or result.boxes.id is None:
@@ -115,15 +133,14 @@ class VideoProcessor:
                 current_track_ids.add(tid)
                 kpts = keypoints[i]
                 bbox = boxes[i]
-                others = [p for p in all_persons_info if p['track_id'] != tid]
+                others = [p for p in all_persons_info if p["track_id"] != tid]
                 self.track_history[tid].append(kpts.copy())
 
                 if tid not in self.track_last_action:
-                    self.track_last_action[tid] = 'normal'
+                    self.track_last_action[tid] = "normal"
 
                 action_en, action_cn, conf = self.action_recognizer.predict(
-                    tid, list(self.track_history[tid]), bbox, (h, w),
-                    all_persons=others
+                    tid, list(self.track_history[tid]), bbox, (h, w), all_persons=others
                 )
                 self.track_last_action[tid] = action_en
                 self.current_actions.append((action_en, action_cn, conf, tid, bbox))
@@ -139,10 +156,8 @@ class VideoProcessor:
 
                 x1, y1, x2, y2 = map(int, bbox)
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                label = f'ID:{tid} {action_cn}'
-                annotated = cv2_draw_chinese(annotated, label,
-                                             (x1, max(y1 - 28, 0)),
-                                             font_size=18, color=color)
+                label = f"ID:{tid} {action_cn}"
+                annotated = cv2_draw_chinese(annotated, label, (x1, max(y1 - 28, 0)), font_size=18, color=color)
 
         gone = set(self.track_history.keys()) - current_track_ids
         for tid in gone:
@@ -157,12 +172,11 @@ class VideoProcessor:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='扶梯行人动作识别核心管线')
-    parser.add_argument('--video', type=str, default='pose_test1.mp4', help='视频路径')
-    parser.add_argument('--camera', action='store_true', help='使用摄像头')
-    parser.add_argument('--direction', type=str, default='up', choices=['up', 'down'],
-                        help='扶梯运行方向')
-    parser.add_argument('--conf', type=float, default=0.5, help='检测置信度阈值')
+    parser = argparse.ArgumentParser(description="扶梯行人动作识别核心管线")
+    parser.add_argument("--video", type=str, default="pose_test1.mp4", help="视频路径")
+    parser.add_argument("--camera", action="store_true", help="使用摄像头")
+    parser.add_argument("--direction", type=str, default="up", choices=["up", "down"], help="扶梯运行方向")
+    parser.add_argument("--conf", type=float, default=0.5, help="检测置信度阈值")
     args = parser.parse_args()
 
     print("=" * 50)
@@ -171,14 +185,12 @@ def main():
     print("=" * 50)
 
     print("\n[1/3] 加载 YOLOv8 姿态估计模型...")
-    pose_model = YOLO('yolov8n-pose.pt')
+    pose_model = YOLO("yolov8n-pose.pt")
 
     print("[2/3] 初始化动作识别器（规则引擎 + ST-GCN）...")
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     action_recognizer = ActionRecognizer(
-        weight_path='st_gcn.kinetics.pt',
-        escalator_direction=args.direction,
-        device=device
+        weight_path="st_gcn.kinetics.pt", escalator_direction=args.direction, device=device
     )
     print(f"    设备: {device}, 扶梯方向: {'上行' if args.direction == 'up' else '下行'}")
 
@@ -193,7 +205,7 @@ def main():
 
     processor = VideoProcessor(src, pose_model, action_recognizer)
     if not processor.ok:
-        print(f"错误: 无法打开视频源")
+        print("错误: 无法打开视频源")
         return
 
     print("\n开始处理... 按 'q' 退出, 按 's' 截图")
@@ -216,15 +228,14 @@ def main():
             info = " | ".join([f"{act}:{cnt}" for act, cnt in sorted_acts[:3]])
         else:
             info = "无行人"
-        annotated = cv2_draw_chinese(annotated, f"行为统计: {info}",
-                                     (10, 8), font_size=20, color=(255, 255, 255))
+        annotated = cv2_draw_chinese(annotated, f"行为统计: {info}", (10, 8), font_size=20, color=(255, 255, 255))
 
-        cv2.imshow('扶梯行人动作识别', annotated)
+        cv2.imshow("扶梯行人动作识别", annotated)
         key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
+        if key == ord("q"):
             break
-        elif key == ord('s'):
-            cv2.imwrite(f'screenshot_{processor.frame_count:04d}.png', annotated)
+        elif key == ord("s"):
+            cv2.imwrite(f"screenshot_{processor.frame_count:04d}.png", annotated)
             print(f"  截图已保存: screenshot_{processor.frame_count:04d}.png")
 
     processor.close()
@@ -233,5 +244,5 @@ def main():
     print(f"处理完成，共 {processor.frame_count} 帧")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
