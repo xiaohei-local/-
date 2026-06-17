@@ -1,4 +1,3 @@
-
 path: coco # dataset root dir
 train: train/images # train images (relative to 'path') 118287 images
 val: val/images # val images (relative to 'path') 5000 images
@@ -14,7 +13,6 @@ names:
   5: bus
   6: train
   7: truck
-
 
 # Download script/URL (optional)
 download: |
